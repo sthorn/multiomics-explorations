@@ -1,0 +1,112 @@
+---
+title: "Simple RNA-Seq analysis with DESeq2"
+output: html_notebook
+---
+
+## Introduction
+
+In this notebook I'm going to perform a simple RNA-Seq analysis using the `DESeq2` package (available through Bioconductor).
+
+## Data
+
+The [`airway`](http://www.bioconductor.org/packages/release/data/experiment/html/airway.html) package has some conveniently curated data that makes the analysis straightforward. First, we load the dataset:
+```{r}
+library(airway)
+data(airway)
+```
+The data comes from Himes et al. "RNA-Seq Transcriptome Profiling Identifies CRISPLD2 as a Glucocorticoid Responsive Gene that Modulates Cytokine Function in Airway Smooth Muscle Cells." PLoS One. 2014 Jun 13;9(6):e99625 (https://doi.org/10.1371/journal.pone.0099625)
+
+The experiment used RNA-Seq to compare four human airway smooth muscle cell lines treated with dexamethasone or left untreated
+
+`airway` is a `RangedSummarizedExperiment` object, which arranges data in a convenient way. Some information about the experiment can be found with `colData()`
+
+```{r}
+colData(airway)
+```
+
+We can see there are eight samples (the rows) from four different cells (`cell` column). There appears to be two treatments: `dex` (dexamethasone) and `albut` (albuterol), but the albuterol treatment was not included in the publication (note that all the entries for `albut` are `untrt`) so we ignore it here.
+
+Raw RNA count data is available with`assay()`. For example, for the first 10 genes (and all eight samples):
+
+```{r}
+assay(airway)[1:10, ]
+```
+
+## Differential expression
+
+[`DESeq2`](https://bioconductor.org/packages/release/bioc/html/DESeq2.html) is an easy-to-use package for differential expression. Other packages are available, e.g. limma, edgeR and Cuffdiff.
+
+First, we create a `DESeqDataSet` object from the `airway` dataset and an experimental design: we are interested in how the gene expression varies with the different cell types (`cell`), and dexamethasone (`dex`) treatment:
+
+```{r}
+library(DESeq2)
+dds <- DESeqDataSet(airway, design= ~ cell + dex)
+```
+
+Next, we set the reference level of `dds$dex` (the dexamethasone treatment) to be untreated (`untrt`) - this means that `DESeq2` will report differential expression as treated over untreated, which is preferred.
+
+```{r}
+dds$dex <- relevel(dds$dex, 'untrt')
+levels(dds$dex)  # Display the levels - the reference level is the first one
+```
+
+Now, we can run the analysis, setting a false discovery rate (FDR) of 0.05:
+
+```{r}
+dds <- DESeq(dds)
+res <- results(dds, alpha=0.05)
+```
+
+`DESeq2` models expression counts with the negative binomial distribution. It calculates differential expression as the base 2 logarithm of the fold change (the ratio of normalised counts for treated over untreated). From its fitted model it estimates p-values and uses (by default) the Benjamini-Hochberg procedure to control the FDR. 
+
+For more details on `DESeq2` see https://doi.org/10.1186/s13059-014-0550-8, and for the Benjamini-Hochberg procedure: https://doi.org/10.1111/j.2517-6161.1995.tb02031.x
+
+## Results 
+
+A quick summary of the results can be got with `summary()`:
+
+```{r}
+summary(res)
+```
+
+So, the analysis found 2211 up-regulated and 1817 down-regulated genes. We would expect that approximately 5 % (0.05) of these are likely to be false positives.
+
+The results (`res`) include the log base 2 of the fold change (positive values are up-regulated genes), and the uncorrected (`pvalue`) and corrected (`padj`) p-values. We can display the first few genes with the smallest adjusted p-values with:
+```{r}
+res_sorted <- res[order(res$padj), ]  # sort by padj
+res_sorted[1:10, ]
+```
+
+The paper identifed 316 differentially expressed genes, which is rather fewer than found here (more on this later). It highlights some 'well known' genes: DUSP1, KLF15, PER1, TSC22D3 and 'less investigated' ones: C7, CCDC69, CRISPLD2. 
+
+Let's see if `DESeq2` found these as significantly differentially expressed genes. We create a data frame, sorted by adjusted p-value, just containing these interesting genes:
+
+```{r}
+# Add rank to the sorted results
+res_sorted$rank <- 1:nrow(res)
+# Interesting genes
+int_genes <- c("DUSP1", "KLF15", "PER1", "TSC22D3", "C7", "CCDC69", "CRISPLD2")
+# Look up the ensembl identifiers for these genes
+library(org.Hs.eg.db)
+g2eid <- select(org.Hs.eg.db, keys=int_genes, 
+                      columns=c('SYMBOL', 'ENSEMBL'), 
+                      keytype="SYMBOL")
+# Create, and display a data frame for the interesting genes, with relevant columns
+int_res <- res_sorted[g2eid$ENSEMBL, c('log2FoldChange', 'padj', 'rank')]
+int_res$gene <- g2eid$SYMBOL 
+int_res
+```
+
+All of the interesting genes highlighted in the paper are deemed significant by the `DESeq2` analysis (adjusted p-values much smaller than 0.05). 
+
+The log2 fold change compares very well with that reported in the paper ([Table S3](https://doi.org/10.1371/journal.pone.0099625.s014)), but the p-values estimated by `DESeq2` are much smaller. Because of this, `DESeq2` obtains many more significant genes (4028) compared to the paper (316). Possible reasons for this difference are:
+
+* Different software: the paper used the [Cufflinks](http://cole-trapnell-lab.github.io/cufflinks/) suite of tools, with Cuffdiff used to obtain differential expression
+
+* The `airway` dataset has fewer read counts than reported in the paper ([Table S1](https://doi.org/10.1371/journal.pone.0099625.s012)). Read counts per sample can be obtained with `colSums(assay(airway))`. Perhaps some data used in the paper didn't make it into the `airway` package?
+
+# Summary
+
+`DESeq2` and the `airway` dataset make for a very easy differential expression analysis example. Results are comparable with those reported in the paper although p-values estimated by `DESeq2` are much smaller. 
+
+It would be interesting to refine the lists of significantly expressed genes by performing gene set analysis (using gene ontologies) as was done in the paper. Perhaps I'll make a future notebook on this...
