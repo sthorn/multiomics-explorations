@@ -1,6 +1,6 @@
 # Multiomics Explorations
 
-Some R Notebooks exploring analysis of various multiomics data.
+Some R Notebooks exploring the analysis of various multiomics data.
 
 ## Contents
 
